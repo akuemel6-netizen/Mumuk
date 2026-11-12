@@ -1,0 +1,308 @@
+-- Check for table that is shared between executions.
+if not shared then
+	return warn("No shared, no script.")
+end
+
+-- Initialize Luraph globals if they do not exist.
+loadstring("getfenv().LPH_NO_VIRTUALIZE = function(...) return ... end")()
+getfenv().PP_SCRAMBLE_NUM = function(...) return ... end
+getfenv().PP_SCRAMBLE_STR = function(...) return ... end
+getfenv().PP_SCRAMBLE_RE_NUM = function(...) return ... end
+
+local PintolHub = { queued = false, silent = false }
+
+-- Services.
+local playersService = game:GetService("Players")
+local runService = game:GetService("RunService")
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local workspace = game:GetService("Workspace")
+local virtualUser = game:GetService("VirtualUser")
+local lighting = game:GetService("Lighting")
+
+local localPlayer = playersService.LocalPlayer
+
+-- State.
+local state = {
+	match = {},
+	performance = {},
+	player = {},
+	lobby = {},
+	macro = {},
+	antiBan = {}
+}
+
+---Anti-AFK setup to prevent disconnects.
+localPlayer.Idled:Connect(function()
+	virtualUser:CaptureController()
+	virtualUser:ClickButton2(Vector2.new())
+end)
+
+---Find and fire an event by fuzzy name.
+---@param name string
+local function fireNetworkEvent(name, ...)
+	for _, inst in ipairs(replicatedStorage:GetDescendants()) do
+		if inst:IsA("RemoteEvent") and string.find(inst.Name, name) then
+			inst:FireServer(...)
+		elseif inst:IsA("RemoteFunction") and string.find(inst.Name, name) then
+			task.spawn(function(...) inst:InvokeServer(...) end, ...)
+		end
+	end
+end
+
+---Applies aggressive low performance optimizations.
+local function applyLowPerformance()
+	if not state.performance.lowPerf then return end
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("BasePart") then
+			obj.Material = Enum.Material.Plastic
+			obj.Reflectance = 0
+		elseif obj:IsA("Decal") or obj:IsA("Texture") then
+			obj.Transparency = 1
+		elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") then
+			obj.Enabled = false
+		end
+	end
+	lighting.GlobalShadows = false
+end
+
+---Core loop for active toggles.
+local function onHeartbeat()
+	if state.match.skipWave then
+		fireNetworkEvent("Skip")
+		fireNetworkEvent("Vote")
+	end
+	
+	if state.match.speed2x then
+		fireNetworkEvent("Speed", 2)
+	elseif state.match.speed3x then
+		fireNetworkEvent("Speed", 3)
+	end
+	
+	if state.match.autoAbility then
+		fireNetworkEvent("Ability")
+	end
+	
+	if state.match.skipCutscene then
+		fireNetworkEvent("Cutscene")
+	end
+
+	if state.player.followEnemy then
+		local char = localPlayer.Character
+		if char and char:FindFirstChild("HumanoidRootPart") then
+			local mobs = workspace:FindFirstChild("Mobs") or workspace:FindFirstChild("Enemies")
+			if mobs then
+				for _, mob in ipairs(mobs:GetChildren()) do
+					if mob:FindFirstChild("HumanoidRootPart") then
+						char.HumanoidRootPart.CFrame = mob.HumanoidRootPart.CFrame * CFrame.new(0, 5, 0)
+						break
+					end
+				end
+			end
+		end
+	end
+end
+
+---This is called when initialization errors.
+---@param error string
+local function onInitializeError(error)
+	warn("Failed to initialize.")
+	warn(error)
+	warn(debug.traceback())
+end
+
+---Main initialization.
+local function initializeScript()
+	local rayfieldReq = request({Url = "https://sirius.menu/rayfield", Method = "GET"})
+	local Rayfield = loadstring(rayfieldReq.Body)()
+
+	local Window = Rayfield:CreateWindow({
+		Name = "Garden Tower Defense | PintolHub | v2.5.5",
+		LoadingTitle = "PintolHub",
+		LoadingSubtitle = "Garden Tower Defense",
+		ConfigurationSaving = {
+			Enabled = true,
+			FolderName = "PintolHubGTD",
+			FileName = "Config"
+		},
+		KeySystem = false
+	})
+
+	local MatchTab = Window:CreateTab("Match", "swords")
+	local AutoModeTab = Window:CreateTab("Auto Mode", "bot")
+	local MacroTab = Window:CreateTab("Macro", "file-code")
+	local AntiBanTab = Window:CreateTab("Anti Ban", "shield")
+
+	MatchTab:CreateSection("Match")
+
+	MatchTab:CreateToggle({
+		Name = "Auto Skip Cutscene",
+		CurrentValue = false,
+		Callback = function(val) state.match.skipCutscene = val end,
+	})
+
+	MatchTab:CreateToggle({
+		Name = "Auto Skip Wave",
+		CurrentValue = false,
+		Callback = function(val) state.match.skipWave = val end,
+	})
+
+	MatchTab:CreateToggle({
+		Name = "Auto 2x Speed",
+		CurrentValue = false,
+		Callback = function(val) state.match.speed2x = val end,
+	})
+
+	MatchTab:CreateToggle({
+		Name = "Auto 3x Speed",
+		CurrentValue = false,
+		Callback = function(val) state.match.speed3x = val end,
+	})
+
+	MatchTab:CreateToggle({
+		Name = "Auto Ability",
+		CurrentValue = false,
+		Callback = function(val) state.match.autoAbility = val end,
+	})
+
+	MatchTab:CreateToggle({
+		Name = "Auto Replay",
+		CurrentValue = false,
+		Callback = function(val)
+			state.match.autoReplay = val
+			if val then fireNetworkEvent("Replay") end
+		end,
+	})
+
+	MatchTab:CreateToggle({
+		Name = "Auto Return",
+		CurrentValue = false,
+		Callback = function(val)
+			state.match.autoReturn = val
+			if val then fireNetworkEvent("Return") end
+		end,
+	})
+
+	MatchTab:CreateSection("Performance")
+
+	MatchTab:CreateToggle({
+		Name = "Disable 3D Rendering",
+		CurrentValue = false,
+		Callback = function(val)
+			state.performance.disable3d = val
+			runService:Set3dRenderingEnabled(not val)
+		end,
+	})
+
+	MatchTab:CreateToggle({
+		Name = "Enable Low Performance",
+		CurrentValue = false,
+		Callback = function(val)
+			state.performance.lowPerf = val
+			if val then applyLowPerformance() end
+		end,
+	})
+
+	MatchTab:CreateToggle({
+		Name = "Clean Old Maps",
+		CurrentValue = false,
+		Callback = function(val) state.performance.cleanMaps = val end,
+	})
+	
+	MatchTab:CreateSection("Player")
+	
+	MatchTab:CreateToggle({
+		Name = "Auto Follow Enemy",
+		CurrentValue = false,
+		Callback = function(val) state.player.followEnemy = val end,
+	})
+	
+	MatchTab:CreateToggle({
+		Name = "Auto Beggar",
+		CurrentValue = false,
+		Callback = function(val) state.player.autoBeggar = val end,
+	})
+
+	AutoModeTab:CreateSection("Lobby")
+
+	AutoModeTab:CreateDropdown({
+		Name = "Difficulty",
+		Options = {"Normal", "Hard", "Nightmare"},
+		CurrentOption = {"Normal"},
+		MultipleOptions = false,
+		Callback = function(opt) 
+			state.lobby.difficulty = opt[1]
+			fireNetworkEvent("Difficulty", opt[1])
+		end,
+	})
+
+	AutoModeTab:CreateToggle({
+		Name = "Auto Difficulty",
+		CurrentValue = false,
+		Callback = function(val) state.lobby.autoDifficulty = val end,
+	})
+
+	MacroTab:CreateSection("Record / Play")
+
+	MacroTab:CreateToggle({
+		Name = "Record Macro",
+		CurrentValue = false,
+		Callback = function(val) state.macro.recording = val end,
+	})
+
+	MacroTab:CreateToggle({
+		Name = "Play Macro",
+		CurrentValue = false,
+		Callback = function(val) state.macro.playing = val end,
+	})
+
+	MacroTab:CreateToggle({
+		Name = "Teleport Before Placing",
+		CurrentValue = false,
+		Callback = function(val) state.macro.tpBeforePlace = val end,
+	})
+
+	AntiBanTab:CreateSection("Anti Ban")
+
+	AntiBanTab:CreateToggle({
+		Name = "Anti Ban",
+		CurrentValue = false,
+		Callback = function(val) state.antiBan.enabled = val end,
+	})
+
+	AntiBanTab:CreateSlider({
+		Name = "Placement Spread",
+		Range = {0.3, 2.0},
+		Increment = 0.1,
+		Suffix = "studs",
+		CurrentValue = 0.3,
+		Callback = function(val) state.antiBan.placementSpread = val end,
+	})
+
+	AntiBanTab:CreateSlider({
+		Name = "Walk Radius",
+		Range = {1, 15},
+		Increment = 1,
+		Suffix = "studs",
+		CurrentValue = 6,
+		Callback = function(val) state.antiBan.walkRadius = val end,
+	})
+
+	AntiBanTab:CreateSlider({
+		Name = "Micro Teleport Radius",
+		Range = {1, 8},
+		Increment = 1,
+		Suffix = "studs",
+		CurrentValue = 3,
+		Callback = function(val) state.antiBan.microTpRadius = val end,
+	})
+
+	Rayfield:LoadConfiguration()
+	runService.Heartbeat:Connect(onHeartbeat)
+end
+
+if shared.PintolHub then
+	shared.PintolHub.queued = false
+end
+
+shared.PintolHub = PintolHub
+return xpcall(initializeScript, onInitializeError)
